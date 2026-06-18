@@ -26,6 +26,11 @@ export function formatPriceCents(bps: number): string {
   return `${(bps / 100).toFixed(0)}¢`
 }
 
+// Input is a price in cents (0..100), i.e. the implied probability percentage.
+export function formatProbabilityCents(cents: number): string {
+  return `${cents.toFixed(0)}%`
+}
+
 export function formatCompactNumber(value: number): string {
   return new Intl.NumberFormat("en-US", {
     notation: "compact",
