@@ -20,7 +20,7 @@ export interface PaymentRow {
  * Creates a pending deposit record and a Stripe embedded Checkout session.
  * Funds are only credited to the ledger when the webhook confirms payment.
  */
-export async function createDepositSession(userId: string, amountCents: number) {
+export async function createDepositSession(userId: string, amountCents: number, origin: string) {
   if (!Number.isInteger(amountCents)) throw new Error("Invalid amount")
   if (amountCents < MIN_DEPOSIT_CENTS) throw new Error("Minimum deposit is $5.00")
   if (amountCents > MAX_DEPOSIT_CENTS) throw new Error("Maximum deposit is $25,000.00")
@@ -33,8 +33,6 @@ export async function createDepositSession(userId: string, amountCents: number) 
   const paymentId = paymentRes.rows[0].id
 
   const session = await getStripe().checkout.sessions.create({
-    ui_mode: "embedded",
-    redirect_on_completion: "never",
     mode: "payment",
     line_items: [
       {
@@ -51,10 +49,12 @@ export async function createDepositSession(userId: string, amountCents: number) 
     ],
     metadata: { paymentId, userId, kind: "wallet_deposit" },
     payment_intent_data: { metadata: { paymentId, userId } },
+    success_url: `${origin}/wallet?deposit=success&session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: `${origin}/wallet?deposit=cancelled`,
   })
 
   await query(`UPDATE payments SET stripe_session_id = $1 WHERE id = $2`, [session.id, paymentId])
-  return session.client_secret
+  return { url: session.url, sessionId: session.id }
 }
 
 /**

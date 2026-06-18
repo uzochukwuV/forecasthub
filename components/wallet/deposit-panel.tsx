@@ -1,35 +1,21 @@
 "use client"
 
-import { useCallback, useState } from "react"
-import { useRouter } from "next/navigation"
-import { loadStripe } from "@stripe/stripe-js"
-import { EmbeddedCheckout, EmbeddedCheckoutProvider } from "@stripe/react-stripe-js"
+import { useState, useTransition } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { formatUsd } from "@/lib/format"
 import { startDepositAction } from "@/app/(app)/wallet/actions"
 import { toast } from "sonner"
 
-const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY as string)
 const PRESETS = [2500, 5000, 10000, 25000]
 
 export function DepositPanel() {
-  const router = useRouter()
   const [amount, setAmount] = useState("50.00")
-  const [open, setOpen] = useState(false)
+  const [pending, startTransition] = useTransition()
   const amountCents = Math.round((Number.parseFloat(amount) || 0) * 100)
 
-  const fetchClientSecret = useCallback(async () => {
-    const res = await startDepositAction(amountCents)
-    if (res?.error || !res?.clientSecret) {
-      throw new Error(res?.error ?? "Failed to start deposit")
-    }
-    return res.clientSecret
-  }, [amountCents])
-
-  function openCheckout() {
+  function startDeposit() {
     if (amountCents < 500) {
       toast.error("Minimum deposit is $5.00")
       return
@@ -38,7 +24,20 @@ export function DepositPanel() {
       toast.error("Maximum deposit is $25,000.00")
       return
     }
-    setOpen(true)
+    startTransition(async () => {
+      const res = await startDepositAction(amountCents)
+      if (res?.error || !res?.url) {
+        toast.error(res?.error ?? "Could not start deposit")
+        return
+      }
+      // Stripe's hosted checkout cannot be framed. The v0 preview runs inside an
+      // iframe, so open in a new tab when framed; otherwise navigate the page.
+      if (window.self !== window.top) {
+        window.open(res.url, "_blank", "noopener,noreferrer")
+      } else {
+        window.location.href = res.url
+      }
+    })
   }
 
   return (
@@ -78,34 +77,12 @@ export function DepositPanel() {
         </div>
       </div>
 
-      <Button onClick={openCheckout} className="mt-4 w-full" size="lg">
-        {`Deposit ${formatUsd(amountCents)}`}
+      <Button onClick={startDeposit} disabled={pending} className="mt-4 w-full" size="lg">
+        {pending ? "Redirecting to Stripe…" : `Deposit ${formatUsd(amountCents)}`}
       </Button>
-
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Complete your deposit</DialogTitle>
-          </DialogHeader>
-          {open ? (
-            <EmbeddedCheckoutProvider stripe={stripePromise} options={{ fetchClientSecret }}>
-              <EmbeddedCheckout />
-            </EmbeddedCheckoutProvider>
-          ) : null}
-          <p className="mt-2 text-center text-xs text-muted-foreground">
-            After payment, your balance updates automatically. You can close this window.
-          </p>
-          <Button
-            variant="outline"
-            onClick={() => {
-              setOpen(false)
-              router.refresh()
-            }}
-          >
-            Done
-          </Button>
-        </DialogContent>
-      </Dialog>
+      <p className="mt-2 text-xs text-muted-foreground">
+        You&apos;ll be taken to Stripe&apos;s secure checkout. Test card: 4242 4242 4242 4242.
+      </p>
     </div>
   )
 }

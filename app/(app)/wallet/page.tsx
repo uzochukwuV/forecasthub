@@ -1,6 +1,6 @@
 import { requireUser } from "@/lib/auth"
 import { getBalances } from "@/lib/accounting"
-import { getRecentPayments } from "@/lib/payments"
+import { getRecentPayments, confirmDepositBySession } from "@/lib/payments"
 import { DepositPanel } from "@/components/wallet/deposit-panel"
 import { WithdrawPanel } from "@/components/wallet/withdraw-panel"
 import { StatusBadge } from "@/components/app/status-badge"
@@ -9,8 +9,28 @@ import { cn } from "@/lib/utils"
 
 export const dynamic = "force-dynamic"
 
-export default async function WalletPage() {
+export default async function WalletPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ deposit?: string; session_id?: string }>
+}) {
   const user = await requireUser()
+  const sp = await searchParams
+
+  // When Stripe redirects back after a successful deposit, credit the ledger.
+  // confirmDepositBySession is idempotent, so refreshes can't double-credit.
+  let banner: { ok: boolean; message: string } | null = null
+  if (sp.deposit === "success" && sp.session_id) {
+    try {
+      await confirmDepositBySession(user.id, sp.session_id)
+      banner = { ok: true, message: "Deposit received. Your balance has been updated." }
+    } catch {
+      banner = { ok: false, message: "We couldn't confirm that deposit. Contact support if charged." }
+    }
+  } else if (sp.deposit === "cancelled") {
+    banner = { ok: false, message: "Deposit cancelled. No charge was made." }
+  }
+
   const [balances, payments] = await Promise.all([
     getBalances(user.id),
     getRecentPayments(user.id),
@@ -24,6 +44,20 @@ export default async function WalletPage() {
           Deposit and withdraw funds. All movements are recorded in the ledger.
         </p>
       </header>
+
+      {banner ? (
+        <div
+          role="status"
+          className={cn(
+            "mb-6 rounded-lg border px-4 py-3 text-sm",
+            banner.ok
+              ? "border-primary/40 bg-primary/10 text-primary"
+              : "border-destructive/40 bg-destructive/10 text-destructive",
+          )}
+        >
+          {banner.message}
+        </div>
+      ) : null}
 
       <div className="mb-6 grid gap-4 sm:grid-cols-3">
         <div className="rounded-lg border border-border bg-card p-5">
