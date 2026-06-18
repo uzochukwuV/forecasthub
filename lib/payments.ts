@@ -1,6 +1,6 @@
 import "server-only"
 import { query, withTransaction } from "@/lib/db"
-import { stripe } from "@/lib/stripe"
+import { getStripe } from "@/lib/stripe"
 import { postEntry, getUserAccountIds, getSystemAccountId, getBalances } from "@/lib/accounting"
 import type { PoolClient } from "pg"
 
@@ -32,7 +32,7 @@ export async function createDepositSession(userId: string, amountCents: number) 
   )
   const paymentId = paymentRes.rows[0].id
 
-  const session = await stripe.checkout.sessions.create({
+  const session = await getStripe().checkout.sessions.create({
     ui_mode: "embedded",
     redirect_on_completion: "never",
     mode: "payment",
@@ -77,50 +77,78 @@ export async function creditDeposit(params: {
       [params.eventId, params.eventType],
     )
     if (evt.rowCount === 0) return
-
-    // Lock the payment row.
-    const payRes = await client.query<{
-      id: string
-      user_id: string
-      amount_cents: string
-      status: string
-    }>(
-      `SELECT id, user_id, amount_cents, status FROM payments
-       WHERE stripe_session_id = $1 FOR UPDATE`,
-      [params.sessionId],
-    )
-    const payment = payRes.rows[0]
-    if (!payment) return
-    if (payment.status === "succeeded") return // already credited
-
-    const amount = Number(payment.amount_cents)
-    const { cash } = await getUserAccountIds(client, payment.user_id)
-    const stripeAcct = await getSystemAccountId(client, "external_stripe")
-
-    const entryId = await postEntry(client, {
-      kind: "deposit",
-      referenceId: payment.id,
-      idempotencyKey: `deposit:${payment.id}`,
-      memo: "Stripe deposit",
-      legs: [
-        { accountId: stripeAcct, amount: -amount },
-        { accountId: cash, amount: amount },
-      ],
-    })
-
-    await client.query(
-      `UPDATE payments
-       SET status = 'succeeded', stripe_payment_intent = $1, ledger_entry_id = $2, updated_at = now()
-       WHERE id = $3`,
-      [params.paymentIntentId, entryId, payment.id],
-    )
-
-    await client.query(
-      `INSERT INTO audit_log (user_id, action, detail)
-       VALUES ($1, 'deposit_succeeded', $2)`,
-      [payment.user_id, JSON.stringify({ paymentId: payment.id, amount })],
-    )
+    await applyDepositCredit(client, params.sessionId, params.paymentIntentId)
   })
+}
+
+/**
+ * Confirms a deposit directly from a Checkout session id. Used by the embedded
+ * checkout completion handler (works even when no webhook secret is configured).
+ * Verifies payment status with Stripe before crediting; fully idempotent.
+ */
+export async function confirmDepositBySession(userId: string, sessionId: string) {
+  const session = await getStripe().checkout.sessions.retrieve(sessionId)
+  if (session.metadata?.userId !== userId) throw new Error("Session does not belong to user")
+  if (session.payment_status !== "paid") return { credited: false as const }
+
+  const paymentIntentId =
+    typeof session.payment_intent === "string"
+      ? session.payment_intent
+      : (session.payment_intent?.id ?? null)
+
+  await withTransaction(async (client: PoolClient) => {
+    await applyDepositCredit(client, sessionId, paymentIntentId)
+  })
+  return { credited: true as const }
+}
+
+/** Shared crediting logic. Locks the payment row and posts a balanced ledger entry once. */
+async function applyDepositCredit(
+  client: PoolClient,
+  sessionId: string,
+  paymentIntentId: string | null,
+) {
+  const payRes = await client.query<{
+    id: string
+    user_id: string
+    amount_cents: string
+    status: string
+  }>(
+    `SELECT id, user_id, amount_cents, status FROM payments
+     WHERE stripe_session_id = $1 FOR UPDATE`,
+    [sessionId],
+  )
+  const payment = payRes.rows[0]
+  if (!payment) return
+  if (payment.status === "succeeded") return // already credited
+
+  const amount = Number(payment.amount_cents)
+  const { cash } = await getUserAccountIds(client, payment.user_id)
+  const stripeAcct = await getSystemAccountId(client, "external_stripe")
+
+  const entryId = await postEntry(client, {
+    kind: "deposit",
+    referenceId: payment.id,
+    idempotencyKey: `deposit:${payment.id}`,
+    memo: "Stripe deposit",
+    legs: [
+      { accountId: stripeAcct, amount: -amount },
+      { accountId: cash, amount: amount },
+    ],
+  })
+
+  await client.query(
+    `UPDATE payments
+     SET status = 'succeeded', stripe_payment_intent = $1, ledger_entry_id = $2, updated_at = now()
+     WHERE id = $3`,
+    [paymentIntentId, entryId, payment.id],
+  )
+
+  await client.query(
+    `INSERT INTO audit_log (user_id, action, detail)
+     VALUES ($1, 'deposit_succeeded', $2)`,
+    [payment.user_id, JSON.stringify({ paymentId: payment.id, amount })],
+  )
 }
 
 /**

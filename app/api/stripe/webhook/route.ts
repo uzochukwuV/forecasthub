@@ -1,6 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server"
 import type Stripe from "stripe"
-import { stripe } from "@/lib/stripe"
+import { getStripe } from "@/lib/stripe"
 import { creditDeposit } from "@/lib/payments"
 
 // Stripe requires the raw request body for signature verification.
@@ -12,7 +12,7 @@ export async function POST(req: NextRequest) {
   let event: Stripe.Event
   try {
     if (secret && sig) {
-      event = stripe.webhooks.constructEvent(body, sig, secret)
+      event = getStripe().webhooks.constructEvent(body, sig, secret)
     } else {
       // Fallback for environments without a configured signing secret.
       event = JSON.parse(body) as Stripe.Event
