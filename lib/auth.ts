@@ -3,7 +3,7 @@ import { cookies } from "next/headers"
 import { randomBytes, createHash } from "node:crypto"
 import { hash as argonHash, verify as argonVerify } from "@node-rs/argon2"
 import { query, withTransaction } from "@/lib/db"
-import type { SessionUser, UserRole } from "@/lib/types"
+import type { SessionUser, UserRole, User } from "@/lib/types"
 
 const SESSION_COOKIE = "fh_session"
 const SESSION_TTL_DAYS = 30
@@ -90,6 +90,16 @@ export async function requireUser(): Promise<SessionUser> {
   const user = await getSessionUser()
   if (!user) throw new Error("UNAUTHORIZED")
   return user
+}
+
+// Full user record (profile + KYC + status) for the account page.
+export async function getFullUser(userId: string): Promise<User | null> {
+  const { rows } = await query<User>(
+    `SELECT id, email, display_name, role, status, kyc_status, created_at
+     FROM users WHERE id = $1`,
+    [userId],
+  )
+  return rows[0] ?? null
 }
 
 // Look up a user by email and verify the password. Returns the user id on success.
