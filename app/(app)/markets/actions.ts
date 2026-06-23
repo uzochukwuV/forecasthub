@@ -8,21 +8,15 @@ import { executeBuy } from "@/lib/trading"
 const tradeSchema = z.object({
   marketId: z.string().uuid(),
   side: z.enum(["yes", "no"]),
-  amountDollars: z.coerce.number().positive().max(100000),
+  amountCents: z.number().int().positive().max(10_000_000),
 })
 
-export type TradeState = { error?: string; success?: string } | undefined
+export type TradeInput = z.infer<typeof tradeSchema>
+export type TradeState = { error?: string; success?: string; shares?: number; side?: string } | undefined
 
-export async function placeTradeAction(
-  _prev: TradeState,
-  formData: FormData,
-): Promise<TradeState> {
+export async function placeTradeAction(input: TradeInput): Promise<TradeState> {
   const user = await requireUser()
-  const parsed = tradeSchema.safeParse({
-    marketId: formData.get("marketId"),
-    side: formData.get("side"),
-    amountDollars: formData.get("amountDollars"),
-  })
+  const parsed = tradeSchema.safeParse(input)
   if (!parsed.success) {
     return { error: parsed.error.issues[0]?.message ?? "Invalid trade." }
   }
@@ -32,14 +26,17 @@ export async function placeTradeAction(
       userId: user.id,
       marketId: parsed.data.marketId,
       side: parsed.data.side,
-      amountCents: Math.round(parsed.data.amountDollars * 100),
+      amountCents: parsed.data.amountCents,
     })
     revalidatePath("/dashboard")
-    revalidatePath("/positions")
+    revalidatePath("/bets")
     revalidatePath("/transactions")
-    revalidatePath(`/markets`)
-    const shareUnits = (result.shares / 100).toFixed(2)
-    return { success: `Filled ${shareUnits} ${parsed.data.side.toUpperCase()} shares.` }
+    revalidatePath("/markets")
+    return {
+      success: `Filled ${(result.shares / 100).toFixed(2)} ${parsed.data.side.toUpperCase()} shares.`,
+      shares: result.shares,
+      side: parsed.data.side,
+    }
   } catch (e) {
     return { error: e instanceof Error ? e.message : "Trade failed." }
   }

@@ -48,7 +48,8 @@ export function TradeTicket({ marketId, yesPriceBps, availableCents }: TradeTick
         toast.error(res.error)
         return
       }
-      toast.success(`Filled ${(estShares / 100).toFixed(2)} ${side.toUpperCase()} shares`)
+      const filledShares = res?.shares ?? estShares
+      toast.success(`Filled ${(filledShares / 100).toFixed(2)} ${side.toUpperCase()} shares`)
       router.refresh()
     })
   }
