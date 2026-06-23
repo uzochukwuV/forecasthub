@@ -9,7 +9,7 @@ import { Logo } from "@/components/brand/logo"
 const NAV = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/markets", label: "Markets", icon: TrendingUp },
-  { href: "/positions", label: "Positions", icon: Ticket },
+  { href: "/bets", label: "Bets", icon: Ticket },
   { href: "/wallet", label: "Wallet", icon: Wallet },
   { href: "/transactions", label: "Transactions", icon: Receipt },
   { href: "/account", label: "Account", icon: User },
